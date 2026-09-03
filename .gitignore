@@ -1,0 +1,32 @@
+# Dependency directories
+node_modules/
+
+# Build artifacts
+dist/
+build/
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Environment variables & secrets (NEVER commit)
+.env
+.env.local
+.env.production
+.env.staging
+
+# Test coverage
+coverage/
+
+# IDE files
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db

@@ -1,0 +1,207 @@
+import PDFDocument from 'pdfkit';
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+export interface BillItem {
+  box_number: number;
+  chicken_quantity: number;
+  total_kg: number;
+  price_per_kg: number;
+  amount: number;
+}
+
+export interface BillData {
+  bill_number: string;
+  bill_date: string;
+  customer_name_snapshot: string;
+  customer_mobile_snapshot: string;
+  customer_cr_br_snapshot?: string | null;
+  customer_address_snapshot?: string | null;
+  truck_info_snapshot?: string | null;
+  total_quantity: number;
+  total_kg: number;
+  current_bill_amount: number;
+  previous_pending_amount: number;
+  total_due_amount: number;
+  amount_paid: number;
+  final_pending_amount: number;
+  items: BillItem[];
+}
+
+export async function generateBillPdf(bill: BillData): Promise<string> {
+  const uploadDir = path.resolve(__dirname, '../../uploads/bills');
+  if (!fs.existsSync(uploadDir)) {
+    fs.mkdirSync(uploadDir, { recursive: true });
+  }
+
+  const fileName = `${bill.bill_number}.pdf`;
+  const filePath = path.join(uploadDir, fileName);
+
+  return new Promise((resolve, reject) => {
+    const doc = new PDFDocument({ size: 'A4', margin: 40 });
+    const writeStream = fs.createWriteStream(filePath);
+
+    doc.pipe(writeStream);
+
+    // Primary Colors
+    const primaryColor = '#B91C1C'; // Crimson Red
+    const darkGray = '#1F2937';
+    const lightGray = '#F3F4F6';
+    const borderColor = '#D1D5DB';
+
+    // Header: SS TRADING
+    doc.fillColor(primaryColor)
+       .fontSize(24)
+       .font('Helvetica-Bold')
+       .text('SS TRADING', 40, 40, { align: 'center' });
+
+    doc.fillColor(darkGray)
+       .fontSize(10)
+       .font('Helvetica')
+       .text('CHICKEN WHOLESALER & DISTRIBUTION NETWORK', { align: 'center' })
+       .text('Phone: +91 9876543210 | Email: sstrading@example.com', { align: 'center' });
+
+    doc.moveDown(0.5);
+
+    // Decorative Line
+    doc.strokeColor(primaryColor)
+       .lineWidth(2)
+       .moveTo(40, doc.y)
+       .lineTo(555, doc.y)
+       .stroke();
+
+    doc.moveDown(0.8);
+
+    // Invoice Meta / Customer Info Box
+    const metaY = doc.y;
+    const boxHeight = 75;
+
+    doc.rect(40, metaY, 515, boxHeight)
+       .fillAndStroke(lightGray, borderColor);
+
+    // Left Column: Customer Details
+    doc.fillColor(darkGray)
+       .fontSize(10)
+       .font('Helvetica-Bold')
+       .text('CUSTOMER DETAILS:', 50, metaY + 8);
+
+    doc.font('Helvetica')
+       .text(`Name: ${bill.customer_name_snapshot}`, 50, metaY + 22)
+       .text(`Mobile: ${bill.customer_mobile_snapshot || 'N/A'}`, 50, metaY + 36)
+       .text(`CR/BR: ${bill.customer_cr_br_snapshot || 'N/A'}`, 50, metaY + 50)
+       .text(`Address: ${bill.customer_address_snapshot || 'N/A'}`, 50, metaY + 64);
+
+    // Right Column: Bill Details
+    doc.font('Helvetica-Bold')
+       .text('BILL DETAILS:', 340, metaY + 8);
+
+    doc.font('Helvetica')
+       .text(`Bill Number: `, 340, metaY + 22)
+       .font('Helvetica-Bold')
+       .text(`${bill.bill_number}`, 420, metaY + 22)
+       .font('Helvetica')
+       .text(`Date: ${bill.bill_date}`, 340, metaY + 36)
+       .text(`Vehicle / Truck: ${bill.truck_info_snapshot || 'N/A'}`, 340, metaY + 50);
+
+    doc.y = metaY + boxHeight + 15;
+
+    // Table Header
+    const tableTop = doc.y;
+    doc.rect(40, tableTop, 515, 24)
+       .fillAndStroke(primaryColor, primaryColor);
+
+    doc.fillColor('#FFFFFF')
+       .fontSize(9)
+       .font('Helvetica-Bold');
+
+    doc.text('SR', 45, tableTop + 7, { width: 30, align: 'center' });
+    doc.text('BOX NO', 85, tableTop + 7, { width: 60, align: 'center' });
+    doc.text('QTY (CHICKEN)', 160, tableTop + 7, { width: 90, align: 'center' });
+    doc.text('WEIGHT (KG)', 260, tableTop + 7, { width: 80, align: 'right' });
+    doc.text('RATE / KG (₹)', 360, tableTop + 7, { width: 80, align: 'right' });
+    doc.text('AMOUNT (₹)', 460, tableTop + 7, { width: 85, align: 'right' });
+
+    let currentY = tableTop + 24;
+    doc.fillColor(darkGray).font('Helvetica').fontSize(9);
+
+    bill.items.forEach((item, index) => {
+      const rowBg = index % 2 === 0 ? '#FFFFFF' : '#F9FAFB';
+      doc.rect(40, currentY, 515, 20).fillAndStroke(rowBg, borderColor);
+
+      doc.fillColor(darkGray);
+      doc.text((index + 1).toString(), 45, currentY + 5, { width: 30, align: 'center' });
+      doc.text(`Box ${item.box_number}`, 85, currentY + 5, { width: 60, align: 'center' });
+      doc.text(item.chicken_quantity.toString(), 160, currentY + 5, { width: 90, align: 'center' });
+      doc.text(Number(item.total_kg).toFixed(2), 260, currentY + 5, { width: 80, align: 'right' });
+      doc.text(`₹ ${Number(item.price_per_kg).toFixed(2)}`, 360, currentY + 5, { width: 80, align: 'right' });
+      doc.text(`₹ ${Number(item.amount).toFixed(2)}`, 460, currentY + 5, { width: 85, align: 'right' });
+
+      currentY += 20;
+    });
+
+    // Subtotal Row
+    doc.rect(40, currentY, 515, 22).fillAndStroke('#E5E7EB', borderColor);
+    doc.fillColor(darkGray).font('Helvetica-Bold');
+    doc.text('TOTAL', 85, currentY + 6, { width: 60, align: 'center' });
+    doc.text(bill.total_quantity.toString(), 160, currentY + 6, { width: 90, align: 'center' });
+    doc.text(Number(bill.total_kg).toFixed(2), 260, currentY + 6, { width: 80, align: 'right' });
+    doc.text('—', 360, currentY + 6, { width: 80, align: 'right' });
+    doc.text(`₹ ${Number(bill.current_bill_amount).toFixed(2)}`, 460, currentY + 6, { width: 85, align: 'right' });
+
+    currentY += 32;
+
+    // Financial Calculation Summary Box (Previous Pending, Total Due, Paid, Final Pending)
+    const summaryBoxX = 295;
+    const summaryBoxWidth = 260;
+    const summaryRowHeight = 20;
+
+    doc.rect(summaryBoxX, currentY, summaryBoxWidth, summaryRowHeight * 5)
+       .fillAndStroke('#FFFFFF', borderColor);
+
+    const formatRow = (label: string, value: number, isBold: boolean = false, highlight: boolean = false) => {
+      if (highlight) {
+        doc.rect(summaryBoxX, currentY, summaryBoxWidth, summaryRowHeight).fill('#FEE2E2');
+      }
+      doc.fillColor(highlight ? primaryColor : darkGray)
+         .font(isBold ? 'Helvetica-Bold' : 'Helvetica')
+         .fontSize(9.5);
+
+      doc.text(label, summaryBoxX + 10, currentY + 5, { width: 140, align: 'left' });
+      doc.text(`₹ ${Number(value).toFixed(2)}`, summaryBoxX + 150, currentY + 5, { width: 100, align: 'right' });
+
+      doc.rect(summaryBoxX, currentY, summaryBoxWidth, summaryRowHeight).stroke(borderColor);
+      currentY += summaryRowHeight;
+    };
+
+    formatRow('Current Bill Amount:', bill.current_bill_amount);
+    formatRow('Previous Pending:', bill.previous_pending_amount);
+    formatRow('Total Due Amount:', bill.total_due_amount, true);
+    formatRow('Amount Paid:', bill.amount_paid);
+    formatRow('Final Pending Balance:', bill.final_pending_amount, true, true);
+
+    // Terms & Signatures
+    currentY += 30;
+    doc.fillColor('#6B7280')
+       .fontSize(8)
+       .font('Helvetica')
+       .text('Terms & Conditions:', 40, currentY)
+       .text('1. All chicken weights and counts checked at delivery.', 40, currentY + 12)
+       .text('2. Please settle remaining pending amount as per payment terms.', 40, currentY + 22);
+
+    doc.fillColor(darkGray)
+       .fontSize(9)
+       .font('Helvetica-Bold')
+       .text('For SS TRADING', 440, currentY + 10, { align: 'center' })
+       .font('Helvetica')
+       .text('(Authorized Signatory)', 440, currentY + 40, { align: 'center' });
+
+    doc.end();
+
+    writeStream.on('finish', () => resolve(filePath));
+    writeStream.on('error', (err) => reject(err));
+  });
+}
