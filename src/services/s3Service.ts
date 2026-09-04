@@ -74,7 +74,8 @@ export async function uploadBillPdf(
  */
 export async function generateBillPresignedUrl(
   key: string,
-  expiresInSeconds: number = 3600
+  expiresInSeconds: number = 3600,
+  isAttachment: boolean = false
 ): Promise<string | null> {
   const s3Client = getS3Client();
   if (!s3Client) {
@@ -84,12 +85,13 @@ export async function generateBillPresignedUrl(
   try {
     const bucket = process.env.AWS_S3_BUCKET!;
     const fileName = path.basename(key);
+    const dispositionType = isAttachment ? 'attachment' : 'inline';
 
     const command = new GetObjectCommand({
       Bucket: bucket,
       Key: key,
       ResponseContentType: 'application/pdf',
-      ResponseContentDisposition: `inline; filename="${fileName}"`
+      ResponseContentDisposition: `${dispositionType}; filename="${fileName}"`
     });
 
     const signedUrl = await getSignedUrl(s3Client, command, {

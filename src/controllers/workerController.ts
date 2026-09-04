@@ -117,3 +117,28 @@ export async function getWorkerLedger(req: AuthenticatedRequest, res: Response) 
     res.status(500).json({ success: false, message: error.message });
   }
 }
+
+export async function deleteWorker(req: AuthenticatedRequest, res: Response) {
+  try {
+    const workerId = parseInt(String(req.params.id), 10);
+    const userId = req.user?.userId || 1;
+    const results = await callProcedure('spDataFlowDeleteWorker', [workerId, userId]);
+    const result = (results[0] as any[])[0];
+    res.json({ success: true, data: result, message: 'Worker soft deleted successfully' });
+  } catch (error: any) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+}
+
+export async function deleteWorkerPayment(req: AuthenticatedRequest, res: Response) {
+  try {
+    const paymentId = parseInt(String(req.params.id), 10);
+    const userId = req.user?.userId || 1;
+    const results = await callProcedure('spDataFlowDeleteWorkerPayment', [paymentId, userId]);
+    const result = (results[0] as any[])[0];
+    res.json({ success: true, data: result, message: 'Worker payment soft deleted successfully' });
+  } catch (error: any) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+}
+

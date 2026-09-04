@@ -267,14 +267,14 @@ export async function downloadBillPdf(req: AuthenticatedRequest, res: Response) 
 
     if (fs.existsSync(filePath)) {
       res.setHeader('Content-Type', 'application/pdf');
-      res.setHeader('Content-Disposition', `inline; filename="${fileName}"`);
+      res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
       const fileStream = fs.createReadStream(filePath);
       return fileStream.pipe(res);
     }
 
     // Fallback: Check if file exists in S3 and redirect to presigned URL
     const s3Key = `bills/${fileName}`;
-    const presignedUrl = await generateBillPresignedUrl(s3Key, 3600);
+    const presignedUrl = await generateBillPresignedUrl(s3Key, 3600, true);
     if (presignedUrl) {
       return res.redirect(302, presignedUrl);
     }
@@ -291,7 +291,7 @@ export async function downloadBillPdf(req: AuthenticatedRequest, res: Response) 
  *
  * 1. Validates that the bill exists in the database.
  * 2. Resolves the S3 object key (e.g. bills/ST-2026-00011.pdf).
- * 3. Generates a temporary AWS S3 presigned GET URL (1-hour expiry) with inline PDF headers.
+ * 3. Generates a temporary AWS S3 presigned GET URL (1-hour expiry).
  * 4. Redirects the browser (302) to the presigned URL.
  * 5. Falls back to streaming local PDF if S3 is unavailable.
  */
@@ -301,6 +301,8 @@ export async function viewBillByNumber(req: Request, res: Response) {
     if (!rawBillNumber || !/^[A-Za-z0-9_-]+$/.test(rawBillNumber)) {
       return res.status(400).send('Invalid bill number format.');
     }
+
+    const isDownload = req.query.download === '1' || req.query.download === 'true';
 
     // 1. Find and validate bill in database
     const [rows] = await pool.query(
@@ -317,7 +319,7 @@ export async function viewBillByNumber(req: Request, res: Response) {
     const s3Key = resolveS3Key(bill.pdf_s3_url, bill.bill_number);
 
     // 3. Generate AWS S3 Presigned GET URL (expires in 3600s / 1h)
-    const presignedUrl = await generateBillPresignedUrl(s3Key, 3600);
+    const presignedUrl = await generateBillPresignedUrl(s3Key, 3600, isDownload);
     if (presignedUrl) {
       return res.redirect(302, presignedUrl);
     }
@@ -327,8 +329,9 @@ export async function viewBillByNumber(req: Request, res: Response) {
     const localFilePath = path.resolve(__dirname, '../../uploads/bills', localFileName);
 
     if (fs.existsSync(localFilePath)) {
+      const disposition = isDownload ? 'attachment' : 'inline';
       res.setHeader('Content-Type', 'application/pdf');
-      res.setHeader('Content-Disposition', `inline; filename="${localFileName}"`);
+      res.setHeader('Content-Disposition', `${disposition}; filename="${localFileName}"`);
       const fileStream = fs.createReadStream(localFilePath);
       return fileStream.pipe(res);
     }
@@ -339,3 +342,40 @@ export async function viewBillByNumber(req: Request, res: Response) {
     return res.status(500).send('Internal server error retrieving bill PDF.');
   }
 }
+
+export async function deleteBill(req: AuthenticatedRequest, res: Response) {
+  try {
+    const billId = parseInt(String(req.params.id), 10);
+    const userId = req.user?.userId || 1;
+    const results = await callProcedure('spDataFlowDeleteBill', [billId, userId]);
+    const result = (results[0] as any[])[0];
+    res.json({ success: true, data: result, message: 'Bill soft deleted successfully' });
+  } catch (error: any) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+}
+
+export async function deleteBillPayment(req: AuthenticatedRequest, res: Response) {
+  try {
+    const paymentId = parseInt(String(req.params.id), 10);
+    const userId = req.user?.userId || 1;
+    const results = await callProcedure('spDataFlowDeleteBillPayment', [paymentId, userId]);
+    const result = (results[0] as any[])[0];
+    res.json({ success: true, data: result, message: 'Bill payment soft deleted successfully' });
+  } catch (error: any) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+}
+
+export async function updateBillWhatsappStatus(req: AuthenticatedRequest, res: Response) {
+  try {
+    const billId = parseInt(String(req.params.id), 10);
+    const { status } = req.body;
+    await callProcedure('spDataFlowUpdateBillWhatsappStatus', [billId, status || 'SENT']);
+    res.json({ success: true, message: 'WhatsApp status updated successfully' });
+  } catch (error: any) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+}
+
+

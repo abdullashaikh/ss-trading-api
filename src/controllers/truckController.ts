@@ -127,3 +127,16 @@ export async function saveCustomerDelivery(req: AuthenticatedRequest, res: Respo
     res.status(500).json({ success: false, message: error.message });
   }
 }
+
+export async function deleteCustomerDelivery(req: AuthenticatedRequest, res: Response) {
+  try {
+    const deliveryId = parseInt(String(req.params.id), 10);
+    const userId = req.user?.userId || 1;
+    const results = await callProcedure('spDataFlowDeleteDelivery', [deliveryId, userId]);
+    const result = (results[0] as any[])[0];
+    res.json({ success: true, data: result, message: 'Delivery and allocated boxes soft deleted successfully' });
+  } catch (error: any) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+}
+

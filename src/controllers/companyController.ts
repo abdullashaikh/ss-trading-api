@@ -188,3 +188,40 @@ export async function getCompanyLedger(req: AuthenticatedRequest, res: Response)
     res.status(500).json({ success: false, message: error.message });
   }
 }
+
+export async function deleteCompany(req: AuthenticatedRequest, res: Response) {
+  try {
+    const companyId = parseInt(String(req.params.id), 10);
+    const userId = req.user?.userId || 1;
+    const results = await callProcedure('spDataFlowDeleteCompany', [companyId, userId]);
+    const result = (results[0] as any[])[0];
+    res.json({ success: true, data: result, message: 'Supplier deleted successfully' });
+  } catch (error: any) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+}
+
+export async function deletePurchase(req: AuthenticatedRequest, res: Response) {
+  try {
+    const purchaseId = parseInt(String(req.params.id), 10);
+    const userId = req.user?.userId || 1;
+    const results = await callProcedure('spDataFlowDeletePurchase', [purchaseId, userId]);
+    const result = (results[0] as any[])[0];
+    res.json({ success: true, data: result, message: 'Purchase entry deleted successfully' });
+  } catch (error: any) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+}
+
+export async function deletePayment(req: AuthenticatedRequest, res: Response) {
+  try {
+    const paymentId = parseInt(String(req.params.id), 10);
+    const userId = req.user?.userId || 1;
+    const results = await callProcedure('spDataFlowDeleteCompanyPayment', [paymentId, userId]);
+    const result = (results[0] as any[])[0];
+    res.json({ success: true, data: result, message: 'Supplier payment deleted successfully' });
+  } catch (error: any) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+}
+

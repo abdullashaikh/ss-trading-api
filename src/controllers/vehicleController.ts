@@ -139,3 +139,28 @@ export async function getVehicleReport(req: AuthenticatedRequest, res: Response)
     res.status(500).json({ success: false, message: error.message });
   }
 }
+
+export async function deleteVehicle(req: AuthenticatedRequest, res: Response) {
+  try {
+    const vehicleId = parseInt(String(req.params.id), 10);
+    const userId = req.user?.userId || 1;
+    const results = await callProcedure('spDataFlowDeleteVehicle', [vehicleId, userId]);
+    const result = (results[0] as any[])[0];
+    res.json({ success: true, data: result, message: 'Vehicle soft deleted successfully' });
+  } catch (error: any) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+}
+
+export async function deleteDailyEntry(req: AuthenticatedRequest, res: Response) {
+  try {
+    const entryId = parseInt(String(req.params.id), 10);
+    const userId = req.user?.userId || 1;
+    const results = await callProcedure('spDataFlowDeleteVehicleDailyEntry', [entryId, userId]);
+    const result = (results[0] as any[])[0];
+    res.json({ success: true, data: result, message: 'Daily vehicle entry soft deleted successfully' });
+  } catch (error: any) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+}
+

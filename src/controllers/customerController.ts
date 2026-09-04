@@ -103,3 +103,16 @@ export async function getCustomerLedger(req: AuthenticatedRequest, res: Response
     res.status(500).json({ success: false, message: error.message });
   }
 }
+
+export async function deleteCustomer(req: AuthenticatedRequest, res: Response) {
+  try {
+    const customerId = parseInt(String(req.params.id), 10);
+    const userId = req.user?.userId || 1;
+    const results = await callProcedure('spDataFlowDeleteCustomer', [customerId, userId]);
+    const result = (results[0] as any[])[0];
+    res.json({ success: true, data: result, message: 'Customer deleted successfully' });
+  } catch (error: any) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+}
+
