@@ -21,7 +21,7 @@ export function generateWhatsAppShareUrl(details: WhatsAppBillDetails): { url: s
     '',
     `Your SS Trading bill *${details.billNumber}* has been generated.`,
     '',
-    `*Total Qty (કુલ જથ્થો):* ${details.totalQty}`,
+    `*Total Qty (કુલ નંગ):* ${details.totalQty}`,
     `*Total KG (કુલ વજન):* ${Number(details.totalKg).toFixed(2)} KG`,
     `*Total Amount (કુલ રકમ):* ₹${Number(details.totalAmount).toLocaleString('en-IN')}`,
     `*Pending Balance (બાકી રકમ):* ₹${Number(details.finalPending).toLocaleString('en-IN')}`

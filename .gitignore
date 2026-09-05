@@ -30,3 +30,7 @@ coverage/
 # OS files
 .DS_Store
 Thumbs.db
+
+# Uploads & Generated PDF invoices (stored in AWS S3, never on local server disk)
+uploads/
+*.pdf

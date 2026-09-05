@@ -36,10 +36,10 @@ export function getS3Client(): S3Client | null {
 }
 
 export async function uploadBillPdf(
-  filePath: string,
+  filePathOrBuffer: string | Buffer,
   fileName: string
 ): Promise<{ s3Url: string | null; localPath: string; s3Key?: string }> {
-  const localPath = `/uploads/bills/${fileName}`;
+  const localPath = `/bill/${fileName.replace(/\.pdf$/i, '')}`;
   const s3Client = getS3Client();
 
   if (!s3Client) {
@@ -47,7 +47,9 @@ export async function uploadBillPdf(
   }
 
   try {
-    const fileContent = fs.readFileSync(filePath);
+    const fileContent = Buffer.isBuffer(filePathOrBuffer)
+      ? filePathOrBuffer
+      : fs.readFileSync(filePathOrBuffer);
     const bucket = process.env.AWS_S3_BUCKET!;
     const key = `bills/${fileName}`;
 
@@ -62,9 +64,16 @@ export async function uploadBillPdf(
     const s3Url = `https://${bucket}.s3.${process.env.AWS_REGION || 'us-east-1'}.amazonaws.com/${key}`;
     return { s3Url, localPath, s3Key: key };
   } catch (error) {
-    console.warn('S3 upload skipped/failed, using local fallback:', error);
+    console.warn('S3 upload skipped/failed:', error);
     return { s3Url: null, localPath };
   }
+}
+
+export async function uploadBillPdfBuffer(
+  buffer: Buffer,
+  fileName: string
+): Promise<{ s3Url: string | null; localPath: string; s3Key?: string }> {
+  return uploadBillPdf(buffer, fileName);
 }
 
 /**

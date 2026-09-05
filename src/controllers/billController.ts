@@ -74,9 +74,9 @@ export async function getBillById(req: AuthenticatedRequest, res: Response) {
           final_pending_amount: bill.final_pending_amount,
           items: details
         };
-        const pdfFilePath = await generateBillPdf(billDataForPdf);
+        const pdfBuffer = await generateBillPdf(billDataForPdf);
         const fileName = `${bill.bill_number}.pdf`;
-        const uploadRes = await uploadBillPdf(pdfFilePath, fileName);
+        const uploadRes = await uploadBillPdf(pdfBuffer, fileName);
         pdfLocalPath = uploadRes.localPath;
         pdfS3Url = uploadRes.s3Key || uploadRes.s3Url;
         await callProcedure('spDataFlowUpdateBillPdfUrl', [billId, pdfS3Url, pdfLocalPath]);
@@ -189,14 +189,14 @@ export async function createBill(req: AuthenticatedRequest, res: Response) {
       items: billLineItems
     };
 
-    // Generate fixed PDF invoice
-    const pdfFilePath = await generateBillPdf(billDataForPdf);
+    // Generate fixed PDF invoice in-memory (zero server disk usage)
+    const pdfBuffer = await generateBillPdf(billDataForPdf);
     const fileName = `${billMaster.bill_number}.pdf`;
 
-    // Upload to S3 or save local reference
-    const { s3Url, localPath, s3Key } = await uploadBillPdf(pdfFilePath, fileName);
+    // Upload buffer directly to S3 (no local disk files)
+    const { s3Url, localPath, s3Key } = await uploadBillPdf(pdfBuffer, fileName);
 
-    // Update bill record with S3 key / local path
+    // Update bill record with S3 key / virtual path
     const storedS3Ref = s3Key || s3Url;
     await callProcedure('spDataFlowUpdateBillPdfUrl', [createdBillId, storedS3Ref, localPath]);
 
@@ -260,23 +260,57 @@ export async function recordBillPayment(req: AuthenticatedRequest, res: Response
   }
 }
 
+async function buildBillDataForPdf(billId: number): Promise<BillData | null> {
+  const billResults = await callProcedure('spDataFlowGetBillById', [billId]);
+  const billMaster = (billResults[0] as any[])[0];
+  const billDetails = (billResults[1] as any[]) || [];
+  if (!billMaster) return null;
+
+  return {
+    bill_number: billMaster.bill_number,
+    bill_date: billMaster.bill_date ? new Date(billMaster.bill_date).toISOString().split('T')[0] : '',
+    customer_name_snapshot: billMaster.customer_name_snapshot,
+    customer_mobile_snapshot: billMaster.customer_mobile_snapshot,
+    customer_cr_br_snapshot: billMaster.customer_cr_br_snapshot,
+    customer_address_snapshot: billMaster.customer_address_snapshot,
+    truck_info_snapshot: billMaster.truck_info_snapshot,
+    total_quantity: billMaster.total_quantity,
+    total_kg: billMaster.total_kg,
+    current_bill_amount: billMaster.current_bill_amount,
+    previous_pending_amount: billMaster.previous_pending_amount,
+    total_due_amount: billMaster.total_due_amount,
+    amount_paid: billMaster.amount_paid,
+    final_pending_amount: billMaster.final_pending_amount,
+    items: billDetails
+  };
+}
+
 export async function downloadBillPdf(req: AuthenticatedRequest, res: Response) {
   try {
     const fileName = String(req.params.filename);
-    const filePath = path.resolve(__dirname, '../../uploads/bills', fileName);
-
-    if (fs.existsSync(filePath)) {
-      res.setHeader('Content-Type', 'application/pdf');
-      res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
-      const fileStream = fs.createReadStream(filePath);
-      return fileStream.pipe(res);
-    }
-
-    // Fallback: Check if file exists in S3 and redirect to presigned URL
     const s3Key = `bills/${fileName}`;
+
+    // 1. Redirect to S3 presigned URL if available
     const presignedUrl = await generateBillPresignedUrl(s3Key, 3600, true);
     if (presignedUrl) {
       return res.redirect(302, presignedUrl);
+    }
+
+    // 2. Dynamic in-memory PDF generation fallback (zero server disk usage)
+    const billNumber = fileName.replace(/\.pdf$/i, '');
+    const [rows] = await pool.query(
+      'SELECT bill_id FROM t_bill_master WHERE bill_number = ? AND is_deleted = 0 LIMIT 1',
+      [billNumber]
+    );
+    const bill = (rows as any[])[0];
+    if (bill) {
+      const billData = await buildBillDataForPdf(bill.bill_id);
+      if (billData) {
+        const pdfBuffer = await generateBillPdf(billData);
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
+        return res.send(pdfBuffer);
+      }
     }
 
     return res.status(404).json({ success: false, message: 'PDF file not found' });
@@ -293,7 +327,7 @@ export async function downloadBillPdf(req: AuthenticatedRequest, res: Response) 
  * 2. Resolves the S3 object key (e.g. bills/ST-2026-00011.pdf).
  * 3. Generates a temporary AWS S3 presigned GET URL (1-hour expiry).
  * 4. Redirects the browser (302) to the presigned URL.
- * 5. Falls back to streaming local PDF if S3 is unavailable.
+ * 5. Falls back to generating PDF dynamically in memory (zero server disk usage).
  */
 export async function viewBillByNumber(req: Request, res: Response) {
   try {
@@ -324,16 +358,14 @@ export async function viewBillByNumber(req: Request, res: Response) {
       return res.redirect(302, presignedUrl);
     }
 
-    // 4. Local file fallback if S3 is not configured or presigning fails
-    const localFileName = `${bill.bill_number}.pdf`;
-    const localFilePath = path.resolve(__dirname, '../../uploads/bills', localFileName);
-
-    if (fs.existsSync(localFilePath)) {
+    // 4. Dynamic in-memory PDF generation fallback (zero server disk storage)
+    const billData = await buildBillDataForPdf(bill.bill_id);
+    if (billData) {
+      const pdfBuffer = await generateBillPdf(billData);
       const disposition = isDownload ? 'attachment' : 'inline';
       res.setHeader('Content-Type', 'application/pdf');
-      res.setHeader('Content-Disposition', `${disposition}; filename="${localFileName}"`);
-      const fileStream = fs.createReadStream(localFilePath);
-      return fileStream.pipe(res);
+      res.setHeader('Content-Disposition', `${disposition}; filename="${bill.bill_number}.pdf"`);
+      return res.send(pdfBuffer);
     }
 
     return res.status(404).send('Bill PDF document is not available.');

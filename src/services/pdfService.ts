@@ -32,18 +32,10 @@ export interface BillData {
   items: BillItem[];
 }
 
-export async function generateBillPdf(bill: BillData): Promise<string> {
-  const uploadDir = path.resolve(__dirname, '../../uploads/bills');
-  if (!fs.existsSync(uploadDir)) {
-    fs.mkdirSync(uploadDir, { recursive: true });
-  }
-
-  const fileName = `${bill.bill_number}.pdf`;
-  const filePath = path.join(uploadDir, fileName);
-
+export async function generateBillPdfBuffer(bill: BillData): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     const doc = new PDFDocument({ size: 'A4', margin: 40 });
-    const writeStream = fs.createWriteStream(filePath);
+    const chunks: Buffer[] = [];
 
     // Register Nirmala UI font (supports Gujarati / Devanagari / Latin)
     // Resolve fonts dir: works in both dev (tsx src/) and prod (node dist/)
@@ -53,7 +45,9 @@ export async function generateBillPdf(bill: BillData): Promise<string> {
     doc.registerFont('NirmalaUI', path.join(fontsDir, 'NirmalaUI.ttf'));
     doc.registerFont('NirmalaUI-Bold', path.join(fontsDir, 'NirmalaUI-Bold.ttf'));
 
-    doc.pipe(writeStream);
+    doc.on('data', (chunk) => chunks.push(chunk));
+    doc.on('end', () => resolve(Buffer.concat(chunks)));
+    doc.on('error', (err) => reject(err));
 
     // Primary Colors
     const primaryColor = '#B91C1C'; // Crimson Red
@@ -86,7 +80,7 @@ export async function generateBillPdf(bill: BillData): Promise<string> {
 
     // Invoice Meta / Customer Info Box
     const metaY = doc.y;
-    const boxHeight = 75;
+    const boxHeight = 52;
 
     doc.rect(40, metaY, 515, boxHeight)
        .fillAndStroke(lightGray, borderColor);
@@ -99,9 +93,7 @@ export async function generateBillPdf(bill: BillData): Promise<string> {
 
     doc.font('NirmalaUI')
        .text(`Name: ${bill.customer_name_snapshot}`, 50, metaY + 22)
-       .text(`Mobile: ${bill.customer_mobile_snapshot || 'N/A'}`, 50, metaY + 36)
-       .text(`CR/BR: ${bill.customer_cr_br_snapshot || 'N/A'}`, 50, metaY + 50)
-       .text(`Address: ${bill.customer_address_snapshot || 'N/A'}`, 50, metaY + 64);
+       .text(`Mobile: ${bill.customer_mobile_snapshot || 'N/A'}`, 50, metaY + 36);
 
     // Right Column: Bill Details
     doc.font('NirmalaUI-Bold')
@@ -112,28 +104,27 @@ export async function generateBillPdf(bill: BillData): Promise<string> {
        .font('NirmalaUI-Bold')
        .text(`${bill.bill_number}`, 420, metaY + 22)
        .font('NirmalaUI')
-       .text(`Date: ${bill.bill_date}`, 340, metaY + 36)
-       .text(`Vehicle / Truck: ${bill.truck_info_snapshot || 'N/A'}`, 340, metaY + 50);
+       .text(`Date: ${bill.bill_date}`, 340, metaY + 36);
 
     doc.y = metaY + boxHeight + 15;
 
     // Table Header
     const tableTop = doc.y;
-    doc.rect(40, tableTop, 515, 24)
+    doc.rect(40, tableTop, 515, 36)
        .fillAndStroke(primaryColor, primaryColor);
 
     doc.fillColor('#FFFFFF')
-       .fontSize(9)
+       .fontSize(8)
        .font('NirmalaUI-Bold');
 
-    doc.text('SR (ક્રમ)', 45, tableTop + 7, { width: 30, align: 'center' });
-    doc.text('BOX NO (બોક્સ નં)', 85, tableTop + 7, { width: 60, align: 'center' });
-    doc.text('QTY (CHICKEN/મરઘા)', 160, tableTop + 7, { width: 90, align: 'center' });
-    doc.text('WEIGHT (KG/કિ.ગ્રા.)', 260, tableTop + 7, { width: 80, align: 'right' });
-    doc.text('RATE/KG (ભાવ/₹)', 360, tableTop + 7, { width: 80, align: 'right' });
-    doc.text('AMOUNT (રકમ/₹)', 460, tableTop + 7, { width: 85, align: 'right' });
+    doc.text('SR\n(ક્રમ)', 45, tableTop + 5, { width: 30, align: 'center' });
+    doc.text('BOX NO\n(બોક્સ નં)', 85, tableTop + 5, { width: 60, align: 'center' });
+    doc.text('QTY (CHICKEN)\n(નંગ)', 160, tableTop + 5, { width: 90, align: 'center' });
+    doc.text('WEIGHT (KG)\n(વજન કિ.ગ્રા.)', 260, tableTop + 5, { width: 80, align: 'right' });
+    doc.text('RATE/KG (₹)\n(ભાવ/કિ.ગ્રા.)', 360, tableTop + 5, { width: 80, align: 'right' });
+    doc.text('AMOUNT (₹)\n(રકમ)', 460, tableTop + 5, { width: 85, align: 'right' });
 
-    let currentY = tableTop + 24;
+    let currentY = tableTop + 36;
     doc.fillColor(darkGray).font('NirmalaUI').fontSize(9);
 
     bill.items.forEach((item, index) => {
@@ -208,8 +199,9 @@ export async function generateBillPdf(bill: BillData): Promise<string> {
        .text('(Authorized Signatory)', 440, currentY + 40, { align: 'center' });
 
     doc.end();
-
-    writeStream.on('finish', () => resolve(filePath));
-    writeStream.on('error', (err) => reject(err));
   });
+}
+
+export async function generateBillPdf(bill: BillData): Promise<Buffer> {
+  return generateBillPdfBuffer(bill);
 }
