@@ -7,6 +7,7 @@ import { AuthenticatedRequest } from '../middlewares/auth.js';
 import { generateBillPdf, BillData } from '../services/pdfService.js';
 import { uploadBillPdf, generateBillPresignedUrl, resolveS3Key } from '../services/s3Service.js';
 import { generateWhatsAppShareUrl } from '../services/whatsappService.js';
+import { renderBillHtml } from '../services/htmlBillService.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -349,26 +350,36 @@ export async function viewBillByNumber(req: Request, res: Response) {
       return res.status(404).send('Bill not found.');
     }
 
-    // 2. Resolve S3 object key (e.g. bills/ST-2026-00011.pdf)
-    const s3Key = resolveS3Key(bill.pdf_s3_url, bill.bill_number);
+    // 1. If download is explicitly requested (?download=1 or ?download=true), serve PDF
+    if (isDownload) {
+      const s3Key = resolveS3Key(bill.pdf_s3_url, bill.bill_number);
+      const presignedUrl = await generateBillPresignedUrl(s3Key, 3600, true);
+      if (presignedUrl) {
+        return res.redirect(302, presignedUrl);
+      }
 
-    // 3. Generate AWS S3 Presigned GET URL (expires in 3600s / 1h)
-    const presignedUrl = await generateBillPresignedUrl(s3Key, 3600, isDownload);
-    if (presignedUrl) {
-      return res.redirect(302, presignedUrl);
+      // Dynamic in-memory PDF fallback
+      const billData = await buildBillDataForPdf(bill.bill_id);
+      if (billData) {
+        const pdfBuffer = await generateBillPdf(billData);
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Content-Disposition', `attachment; filename="${bill.bill_number}.pdf"`);
+        return res.send(pdfBuffer);
+      }
+      return res.status(404).send('Bill PDF document is not available.');
     }
 
-    // 4. Dynamic in-memory PDF generation fallback (zero server disk storage)
+    // 2. Default (WhatsApp link click): Open the bill DIRECTLY in the browser
+    // Customers see the invoice instantly without needing to download any file first!
     const billData = await buildBillDataForPdf(bill.bill_id);
     if (billData) {
-      const pdfBuffer = await generateBillPdf(billData);
-      const disposition = isDownload ? 'attachment' : 'inline';
-      res.setHeader('Content-Type', 'application/pdf');
-      res.setHeader('Content-Disposition', `${disposition}; filename="${bill.bill_number}.pdf"`);
-      return res.send(pdfBuffer);
+      const downloadUrl = `/bill/${encodeURIComponent(bill.bill_number)}?download=1`;
+      const html = renderBillHtml(billData, downloadUrl);
+      res.setHeader('Content-Type', 'text/html; charset=utf-8');
+      return res.send(html);
     }
 
-    return res.status(404).send('Bill PDF document is not available.');
+    return res.status(404).send('Bill document is not available.');
   } catch (error: any) {
     console.error('[BillView] Error retrieving bill PDF:', error);
     return res.status(500).send('Internal server error retrieving bill PDF.');
