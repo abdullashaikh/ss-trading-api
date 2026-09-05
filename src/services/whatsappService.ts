@@ -21,10 +21,10 @@ export function generateWhatsAppShareUrl(details: WhatsAppBillDetails): { url: s
     '',
     `Your SS Trading bill *${details.billNumber}* has been generated.`,
     '',
-    `*Total Qty:* ${details.totalQty}`,
-    `*Total KG:* ${Number(details.totalKg).toFixed(2)} KG`,
-    `*Total Amount:* ₹${Number(details.totalAmount).toLocaleString('en-IN')}`,
-    `*Pending Balance:* ₹${Number(details.finalPending).toLocaleString('en-IN')}`
+    `*Total Qty (કુલ જથ્થો):* ${details.totalQty}`,
+    `*Total KG (કુલ વજન):* ${Number(details.totalKg).toFixed(2)} KG`,
+    `*Total Amount (કુલ રકમ):* ₹${Number(details.totalAmount).toLocaleString('en-IN')}`,
+    `*Pending Balance (બાકી રકમ):* ₹${Number(details.finalPending).toLocaleString('en-IN')}`
   ];
 
   if (details.billDownloadUrl) {

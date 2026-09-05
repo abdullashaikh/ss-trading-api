@@ -45,6 +45,14 @@ export async function generateBillPdf(bill: BillData): Promise<string> {
     const doc = new PDFDocument({ size: 'A4', margin: 40 });
     const writeStream = fs.createWriteStream(filePath);
 
+    // Register Nirmala UI font (supports Gujarati / Devanagari / Latin)
+    // Resolve fonts dir: works in both dev (tsx src/) and prod (node dist/)
+    const fontsDirPrimary = path.resolve(__dirname, '../fonts');
+    const fontsDirFallback = path.resolve(__dirname, '../../src/fonts');
+    const fontsDir = fs.existsSync(fontsDirPrimary) ? fontsDirPrimary : fontsDirFallback;
+    doc.registerFont('NirmalaUI', path.join(fontsDir, 'NirmalaUI.ttf'));
+    doc.registerFont('NirmalaUI-Bold', path.join(fontsDir, 'NirmalaUI-Bold.ttf'));
+
     doc.pipe(writeStream);
 
     // Primary Colors
@@ -56,12 +64,12 @@ export async function generateBillPdf(bill: BillData): Promise<string> {
     // Header: SS TRADING
     doc.fillColor(primaryColor)
        .fontSize(24)
-       .font('Helvetica-Bold')
+       .font('NirmalaUI-Bold')
        .text('SS TRADING', 40, 40, { align: 'center' });
 
     doc.fillColor(darkGray)
        .fontSize(10)
-       .font('Helvetica')
+       .font('NirmalaUI')
        .text('CHICKEN WHOLESALER & DISTRIBUTION NETWORK', { align: 'center' })
        .text('Phone: +91 9876543210 | Email: sstrading@example.com', { align: 'center' });
 
@@ -86,24 +94,24 @@ export async function generateBillPdf(bill: BillData): Promise<string> {
     // Left Column: Customer Details
     doc.fillColor(darkGray)
        .fontSize(10)
-       .font('Helvetica-Bold')
+       .font('NirmalaUI-Bold')
        .text('CUSTOMER DETAILS:', 50, metaY + 8);
 
-    doc.font('Helvetica')
+    doc.font('NirmalaUI')
        .text(`Name: ${bill.customer_name_snapshot}`, 50, metaY + 22)
        .text(`Mobile: ${bill.customer_mobile_snapshot || 'N/A'}`, 50, metaY + 36)
        .text(`CR/BR: ${bill.customer_cr_br_snapshot || 'N/A'}`, 50, metaY + 50)
        .text(`Address: ${bill.customer_address_snapshot || 'N/A'}`, 50, metaY + 64);
 
     // Right Column: Bill Details
-    doc.font('Helvetica-Bold')
+    doc.font('NirmalaUI-Bold')
        .text('BILL DETAILS:', 340, metaY + 8);
 
-    doc.font('Helvetica')
+    doc.font('NirmalaUI')
        .text(`Bill Number: `, 340, metaY + 22)
-       .font('Helvetica-Bold')
+       .font('NirmalaUI-Bold')
        .text(`${bill.bill_number}`, 420, metaY + 22)
-       .font('Helvetica')
+       .font('NirmalaUI')
        .text(`Date: ${bill.bill_date}`, 340, metaY + 36)
        .text(`Vehicle / Truck: ${bill.truck_info_snapshot || 'N/A'}`, 340, metaY + 50);
 
@@ -116,17 +124,17 @@ export async function generateBillPdf(bill: BillData): Promise<string> {
 
     doc.fillColor('#FFFFFF')
        .fontSize(9)
-       .font('Helvetica-Bold');
+       .font('NirmalaUI-Bold');
 
-    doc.text('SR', 45, tableTop + 7, { width: 30, align: 'center' });
-    doc.text('BOX NO', 85, tableTop + 7, { width: 60, align: 'center' });
-    doc.text('QTY (CHICKEN)', 160, tableTop + 7, { width: 90, align: 'center' });
-    doc.text('WEIGHT (KG)', 260, tableTop + 7, { width: 80, align: 'right' });
-    doc.text('RATE / KG (₹)', 360, tableTop + 7, { width: 80, align: 'right' });
-    doc.text('AMOUNT (₹)', 460, tableTop + 7, { width: 85, align: 'right' });
+    doc.text('SR (ક્રમ)', 45, tableTop + 7, { width: 30, align: 'center' });
+    doc.text('BOX NO (બોક્સ નં)', 85, tableTop + 7, { width: 60, align: 'center' });
+    doc.text('QTY (CHICKEN/મરઘા)', 160, tableTop + 7, { width: 90, align: 'center' });
+    doc.text('WEIGHT (KG/કિ.ગ્રા.)', 260, tableTop + 7, { width: 80, align: 'right' });
+    doc.text('RATE/KG (ભાવ/₹)', 360, tableTop + 7, { width: 80, align: 'right' });
+    doc.text('AMOUNT (રકમ/₹)', 460, tableTop + 7, { width: 85, align: 'right' });
 
     let currentY = tableTop + 24;
-    doc.fillColor(darkGray).font('Helvetica').fontSize(9);
+    doc.fillColor(darkGray).font('NirmalaUI').fontSize(9);
 
     bill.items.forEach((item, index) => {
       const rowBg = index % 2 === 0 ? '#FFFFFF' : '#F9FAFB';
@@ -145,8 +153,8 @@ export async function generateBillPdf(bill: BillData): Promise<string> {
 
     // Subtotal Row
     doc.rect(40, currentY, 515, 22).fillAndStroke('#E5E7EB', borderColor);
-    doc.fillColor(darkGray).font('Helvetica-Bold');
-    doc.text('TOTAL', 85, currentY + 6, { width: 60, align: 'center' });
+    doc.fillColor(darkGray).font('NirmalaUI-Bold');
+    doc.text('TOTAL (કુલ)', 85, currentY + 6, { width: 60, align: 'center' });
     doc.text(bill.total_quantity.toString(), 160, currentY + 6, { width: 90, align: 'center' });
     doc.text(Number(bill.total_kg).toFixed(2), 260, currentY + 6, { width: 80, align: 'right' });
     doc.text('—', 360, currentY + 6, { width: 80, align: 'right' });
@@ -155,8 +163,8 @@ export async function generateBillPdf(bill: BillData): Promise<string> {
     currentY += 32;
 
     // Financial Calculation Summary Box (Previous Pending, Total Due, Paid, Final Pending)
-    const summaryBoxX = 295;
-    const summaryBoxWidth = 260;
+    const summaryBoxX = 255;
+    const summaryBoxWidth = 300;
     const summaryRowHeight = 20;
 
     doc.rect(summaryBoxX, currentY, summaryBoxWidth, summaryRowHeight * 5)
@@ -167,36 +175,36 @@ export async function generateBillPdf(bill: BillData): Promise<string> {
         doc.rect(summaryBoxX, currentY, summaryBoxWidth, summaryRowHeight).fill('#FEE2E2');
       }
       doc.fillColor(highlight ? primaryColor : darkGray)
-         .font(isBold ? 'Helvetica-Bold' : 'Helvetica')
-         .fontSize(9.5);
+         .font(isBold ? 'NirmalaUI-Bold' : 'NirmalaUI')
+         .fontSize(9);
 
-      doc.text(label, summaryBoxX + 10, currentY + 5, { width: 140, align: 'left' });
-      doc.text(`₹ ${Number(value).toFixed(2)}`, summaryBoxX + 150, currentY + 5, { width: 100, align: 'right' });
+      doc.text(label, summaryBoxX + 10, currentY + 5, { width: 180, align: 'left' });
+      doc.text(`₹ ${Number(value).toFixed(2)}`, summaryBoxX + 190, currentY + 5, { width: 100, align: 'right' });
 
       doc.rect(summaryBoxX, currentY, summaryBoxWidth, summaryRowHeight).stroke(borderColor);
       currentY += summaryRowHeight;
     };
 
-    formatRow('Current Bill Amount:', bill.current_bill_amount);
-    formatRow('Previous Pending:', bill.previous_pending_amount);
-    formatRow('Total Due Amount:', bill.total_due_amount, true);
-    formatRow('Amount Paid:', bill.amount_paid);
-    formatRow('Final Pending Balance:', bill.final_pending_amount, true, true);
+    formatRow('Current Bill Amount (હાલનું બિલ):', bill.current_bill_amount);
+    formatRow('Previous Pending (અગાઉની બાકી):', bill.previous_pending_amount);
+    formatRow('Total Due Amount (કુલ બાકી):', bill.total_due_amount, true);
+    formatRow('Amount Paid (ચૂકવેલ રકમ):', bill.amount_paid);
+    formatRow('Final Pending Balance (અંતિમ બાકી):', bill.final_pending_amount, true, true);
 
     // Terms & Signatures
     currentY += 30;
     doc.fillColor('#6B7280')
        .fontSize(8)
-       .font('Helvetica')
+       .font('NirmalaUI')
        .text('Terms & Conditions:', 40, currentY)
        .text('1. All chicken weights and counts checked at delivery.', 40, currentY + 12)
        .text('2. Please settle remaining pending amount as per payment terms.', 40, currentY + 22);
 
     doc.fillColor(darkGray)
        .fontSize(9)
-       .font('Helvetica-Bold')
+       .font('NirmalaUI-Bold')
        .text('For SS TRADING', 440, currentY + 10, { align: 'center' })
-       .font('Helvetica')
+       .font('NirmalaUI')
        .text('(Authorized Signatory)', 440, currentY + 40, { align: 'center' });
 
     doc.end();
