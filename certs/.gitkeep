@@ -1,0 +1,2 @@
+# Place your production SSL CA certificate here (e.g. ca.pem) if your MySQL host requires SSL.
+# Certificate files (*.pem, *.crt, *.key) are excluded from version control via .gitignore.
