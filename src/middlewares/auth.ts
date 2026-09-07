@@ -12,8 +12,10 @@ export interface AuthenticatedRequest extends Request {
   };
 }
 
+const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '365d';
+
 export function generateToken(payload: { userId: number; loginName: string; userName: string; role: string }): string {
-  return jwt.sign(payload, JWT_SECRET, { expiresIn: '7d' });
+  return jwt.sign(payload, JWT_SECRET, { expiresIn: JWT_EXPIRES_IN as any });
 }
 
 export function authenticate(req: AuthenticatedRequest, res: Response, next: NextFunction) {
