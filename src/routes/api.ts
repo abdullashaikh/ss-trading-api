@@ -25,8 +25,13 @@ import {
 } from '../controllers/truckController.js';
 import {
   getBills, getBillById, createBill, deleteBill, recordBillPayment, deleteBillPayment, downloadBillPdf, viewBillByNumber,
-  updateBillWhatsappStatus
+  updateBillWhatsappStatus, sendBillImageWhatsApp
 } from '../controllers/billController.js';
+import {
+  handleWhatsAppWebhookGet,
+  handleWhatsAppWebhookPost,
+  getBillWhatsAppStatus
+} from '../controllers/whatsappWebhookController.js';
 import {
   getPurchaseReport, getSalesReport, getWorkerReport, getOverallBusinessReport
 } from '../controllers/reportController.js';
@@ -107,9 +112,15 @@ router.delete('/bills/:id', authenticate as any, deleteBill as any);
 router.post('/bills/payment', authenticate as any, recordBillPayment as any);
 router.delete('/bills/payment/:id', authenticate as any, deleteBillPayment as any);
 router.post('/bills/:id/whatsapp-status', authenticate as any, updateBillWhatsappStatus as any);
+router.get('/bills/:id/whatsapp-status', authenticate as any, getBillWhatsAppStatus as any);
+router.post('/bills/:id/send-whatsapp-image', authenticate as any, sendBillImageWhatsApp as any);
 router.get('/bills/pdf/:filename', downloadBillPdf as any);
 router.get('/bills/view/:billNumber', viewBillByNumber as any);
 router.get('/bill/:billNumber', viewBillByNumber as any);
+
+// 8.1 WhatsApp Cloud API Webhook routes
+router.get('/whatsapp/webhook', handleWhatsAppWebhookGet);
+router.post('/whatsapp/webhook', handleWhatsAppWebhookPost);
 
 // 9. Reports routes
 router.get('/reports/purchases', authenticate as any, getPurchaseReport as any);

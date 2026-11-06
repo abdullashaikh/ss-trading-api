@@ -6,7 +6,7 @@ import { pool, callProcedure } from '../config/db.js';
 import { AuthenticatedRequest } from '../middlewares/auth.js';
 import { generateBillPdf, BillData } from '../services/pdfService.js';
 import { uploadBillPdf, generateBillPresignedUrl, resolveS3Key } from '../services/s3Service.js';
-import { generateWhatsAppShareUrl } from '../services/whatsappService.js';
+import { generateWhatsAppShareUrl, sendBillAsWhatsAppImages, WhatsAppBillDetails, isWhatsAppCloudConfigured } from '../services/whatsappService.js';
 import { renderBillHtml } from '../services/htmlBillService.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -420,5 +420,127 @@ export async function updateBillWhatsappStatus(req: AuthenticatedRequest, res: R
     res.status(500).json({ success: false, message: error.message });
   }
 }
+
+// In-flight concurrency lock to prevent duplicate WhatsApp message submissions
+const activeSendingBills = new Set<number>();
+
+/**
+ * Sends a generated bill as high-quality image(s) to the customer via Meta WhatsApp Business Cloud API.
+ * Endpoint: POST /api/bills/:id/send-whatsapp-image
+ */
+export async function sendBillImageWhatsApp(req: AuthenticatedRequest, res: Response) {
+  const billId = parseInt(String(req.params.id), 10);
+
+  if (!billId || isNaN(billId)) {
+    return res.status(400).json({ success: false, message: 'Invalid bill ID' });
+  }
+
+  // Prevent concurrent duplicate submissions for the same bill
+  if (activeSendingBills.has(billId)) {
+    return res.status(409).json({
+      success: false,
+      message: 'A WhatsApp send request is already processing for this bill. Please wait.'
+    });
+  }
+
+  activeSendingBills.add(billId);
+
+  try {
+    // 1. Fetch full bill details from stored procedure
+    const billResults = await callProcedure('spDataFlowGetBillById', [billId]);
+    const billMaster = (billResults[0] as any[])?.[0];
+    const billDetails = (billResults[1] as any[]) || [];
+
+    if (!billMaster) {
+      return res.status(404).json({ success: false, message: 'Bill not found' });
+    }
+
+    const { phone, caption, use_template } = req.body || {};
+
+    // 2. Build bill data for PDF (reusing existing PDF generation flow)
+    const billData: BillData = {
+      bill_number: billMaster.bill_number,
+      bill_date: billMaster.bill_date ? new Date(billMaster.bill_date).toISOString().split('T')[0] : '',
+      customer_name_snapshot: billMaster.customer_name_snapshot,
+      customer_mobile_snapshot: billMaster.customer_mobile_snapshot,
+      customer_cr_br_snapshot: billMaster.customer_cr_br_snapshot,
+      customer_address_snapshot: billMaster.customer_address_snapshot,
+      truck_info_snapshot: billMaster.truck_info_snapshot,
+      total_quantity: billMaster.total_quantity,
+      total_kg: billMaster.total_kg,
+      current_bill_amount: billMaster.current_bill_amount,
+      previous_pending_amount: billMaster.previous_pending_amount,
+      total_due_amount: billMaster.total_due_amount,
+      amount_paid: billMaster.amount_paid,
+      final_pending_amount: billMaster.final_pending_amount,
+      items: billDetails
+    };
+
+    // 3. Generate high-quality PDF in memory
+    const pdfBuffer = await generateBillPdf(billData);
+
+    // 4. Prepare WhatsApp details
+    const waDetails: WhatsAppBillDetails = {
+      customerName: billMaster.customer_name_snapshot,
+      customerMobile: billMaster.customer_mobile_snapshot,
+      billNumber: billMaster.bill_number,
+      billDate: billData.bill_date,
+      totalQty: billMaster.total_quantity,
+      totalKg: billMaster.total_kg,
+      totalAmount: billMaster.current_bill_amount,
+      finalPending: billMaster.final_pending_amount
+    };
+
+    // 5. Send bill page images via official WhatsApp Cloud API
+    const sendResult = await sendBillAsWhatsAppImages(waDetails, pdfBuffer, {
+      billId,
+      phoneOverride: phone,
+      customCaption: caption,
+      useTemplate: Boolean(use_template)
+    });
+
+    return res.json({
+      success: true,
+      message: sendResult.message,
+      data: {
+        bill_id: billId,
+        bill_number: billMaster.bill_number,
+        recipient: sendResult.recipientPhone,
+        total_pages: sendResult.totalPages,
+        messages: sendResult.messagesSent,
+        mode: sendResult.mode
+      }
+    });
+  } catch (error: any) {
+    console.error(`[WhatsApp] Failed to send bill #${billId} via WhatsApp:`, error.message);
+
+    const isConfigError = error.message?.includes('not configured');
+    const isPhoneError = error.message?.includes('Invalid') || error.message?.includes('phone number');
+    const isServiceWindow = error.code === 131047 || error.message?.includes('24-hour service window');
+
+    let statusCode = 500;
+    let errorCode = 'SEND_FAILED';
+
+    if (isConfigError) {
+      statusCode = 503;
+      errorCode = 'WHATSAPP_NOT_CONFIGURED';
+    } else if (isPhoneError) {
+      statusCode = 400;
+      errorCode = 'INVALID_PHONE';
+    } else if (isServiceWindow) {
+      statusCode = 400;
+      errorCode = 'SERVICE_WINDOW_EXPIRED';
+    }
+
+    return res.status(statusCode).json({
+      success: false,
+      message: error.message || 'Failed to send bill via WhatsApp',
+      error_code: errorCode
+    });
+  } finally {
+    activeSendingBills.delete(billId);
+  }
+}
+
 
 

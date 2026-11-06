@@ -6,6 +6,7 @@ import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { router as apiRouter } from './routes/api.js';
 import { viewBillByNumber } from './controllers/billController.js';
+import { handleWhatsAppWebhookGet, handleWhatsAppWebhookPost } from './controllers/whatsappWebhookController.js';
 import { testDatabaseConnection, closeDatabasePool } from './config/db.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -21,7 +22,12 @@ app.set('trust proxy', 1);
 
 // Middlewares
 app.use(cors({ origin: true, credentials: true }));
-app.use(express.json());
+// Preserve exact raw body buffer for Meta HMAC-SHA256 signature verification
+app.use(express.json({
+  verify: (req: any, _res, buf) => {
+    req.rawBody = buf;
+  }
+}));
 app.use(express.urlencoded({ extended: true }));
 
 // Serve uploaded/generated bills statically
@@ -30,6 +36,10 @@ app.use('/uploads', express.static(uploadsPath));
 
 // Clean public bill view/download route (for WhatsApp links & customers)
 app.get('/bill/:billNumber', viewBillByNumber);
+
+// Direct WhatsApp Webhook endpoints (supports both /whatsapp/webhook and /api/whatsapp/webhook)
+app.get('/whatsapp/webhook', handleWhatsAppWebhookGet);
+app.post('/whatsapp/webhook', handleWhatsAppWebhookPost);
 
 // API Routes
 app.use('/api', apiRouter);
