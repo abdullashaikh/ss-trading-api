@@ -407,7 +407,27 @@ export async function sendWhatsAppTemplateWithImage(
 
   const url = `https://graph.facebook.com/${config.graphApiVersion}/${config.phoneNumberId}/messages`;
 
-  const payload: any = {
+  // Format currency amounts without duplicating the rupee symbol (since template includes ₹)
+  const formattedTotal = Number(details.totalAmount).toLocaleString('en-IN');
+  const formattedPending = Number(details.finalPending).toLocaleString('en-IN');
+
+  // Named parameters matching the submitted template (customer_name, invoice_number, total_amount, outstanding_balance)
+  const namedParameters = [
+    { type: 'text', parameter_name: 'customer_name', text: details.customerName || 'Customer' },
+    { type: 'text', parameter_name: 'invoice_number', text: details.billNumber },
+    { type: 'text', parameter_name: 'total_amount', text: formattedTotal },
+    { type: 'text', parameter_name: 'outstanding_balance', text: formattedPending }
+  ];
+
+  // Positional parameters fallback (for {{1}}, {{2}}, {{3}}, {{4}} template definitions)
+  const positionalParameters = [
+    { type: 'text', text: details.customerName || 'Customer' },
+    { type: 'text', text: details.billNumber },
+    { type: 'text', text: formattedTotal },
+    { type: 'text', text: formattedPending }
+  ];
+
+  const buildPayload = (params: any[]) => ({
     messaging_product: 'whatsapp',
     recipient_type: 'individual',
     to: recipientPhone,
@@ -431,27 +451,41 @@ export async function sendWhatsAppTemplateWithImage(
         },
         {
           type: 'body',
-          parameters: [
-            { type: 'text', text: details.customerName || 'Customer' },
-            { type: 'text', text: details.billNumber },
-            { type: 'text', text: `₹${Number(details.totalAmount).toLocaleString('en-IN')}` },
-            { type: 'text', text: `₹${Number(details.finalPending).toLocaleString('en-IN')}` }
-          ]
+          parameters: params
         }
       ]
     }
-  };
+  });
 
-  const res = await fetch(url, {
+  // Attempt with named parameters first (standard for modern Meta templates with variable names)
+  let res = await fetch(url, {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${config.accessToken}`,
       'Content-Type': 'application/json'
     },
-    body: JSON.stringify(payload)
+    body: JSON.stringify(buildPayload(namedParameters))
   });
 
-  const responseJson: any = await res.json().catch(() => ({}));
+  let responseJson: any = await res.json().catch(() => ({}));
+
+  // If rejected because Meta expected positional parameters (or vice versa), auto-retry with positional
+  if (!res.ok && (responseJson?.error?.code === 100 || responseJson?.error?.code === 132000)) {
+    console.warn('[WhatsApp Cloud API] Retrying template with positional parameters fallback...');
+    const retryRes = await fetch(url, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${config.accessToken}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(buildPayload(positionalParameters))
+    });
+    const retryJson = await retryRes.json().catch(() => ({}));
+    if (retryRes.ok) {
+      res = retryRes;
+      responseJson = retryJson;
+    }
+  }
 
   if (!res.ok) {
     const errorObj = responseJson?.error || {};
