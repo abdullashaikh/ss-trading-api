@@ -27,6 +27,17 @@ export async function handleWhatsAppWebhookGet(req: Request, res: Response) {
     const config = getWhatsAppCloudConfig();
     const expectedToken = config.webhookVerifyToken;
 
+    // Direct browser / uptime check (when visited directly in browser without Meta handshake query parameters)
+    if (!mode && !verifyToken && !challenge) {
+      return res.status(200).json({
+        status: 'active',
+        message: 'WhatsApp Cloud API Webhook is live and ready for Meta verification.',
+        endpoint: '/api/whatsapp/webhook',
+        hasVerifyTokenConfigured: Boolean(expectedToken),
+        time: new Date().toISOString()
+      });
+    }
+
     if (!expectedToken) {
       console.warn('[WhatsApp Webhook] Handshake rejected: WHATSAPP_WEBHOOK_VERIFY_TOKEN is not configured in .env');
       return res.status(403).send('Forbidden: Webhook verify token not configured.');
