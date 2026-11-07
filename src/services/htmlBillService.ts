@@ -23,12 +23,12 @@ export function renderBillHtml(bill: BillData, downloadUrl: string): string {
     .map(
       (item, index) => `
     <tr style="background: ${index % 2 === 0 ? '#ffffff' : '#f9fafb'}; border-bottom: 1px solid #f3f4f6;">
-      <td style="padding: 10px 8px; text-align: center; font-size: 12px; color: #6b7280;">${index + 1}</td>
-      <td style="padding: 10px 8px; text-align: center; font-size: 12px; font-weight: 700; color: #1f2937;">Box ${item.box_number}</td>
-      <td style="padding: 10px 8px; text-align: center; font-size: 12px; font-weight: 600; color: #374151;">${item.chicken_quantity}</td>
-      <td style="padding: 10px 8px; text-align: right; font-size: 12px; font-weight: 600; color: #374151;">${Number(item.total_kg).toFixed(2)} KG</td>
-      <td style="padding: 10px 8px; text-align: right; font-size: 12px; font-weight: 600; color: #374151;">₹ ${Number(item.price_per_kg).toFixed(2)}</td>
-      <td style="padding: 10px 8px; text-align: right; font-size: 12px; font-weight: 700; color: #111827;">${formatCurrency(item.amount)}</td>
+      <td style="padding: 7px 4px; text-align: center; font-size: 11.5px; color: #6b7280;">${index + 1}</td>
+      <td style="padding: 7px 4px; text-align: center; font-size: 11.5px; font-weight: 700; color: #1f2937;">Box ${item.box_number}</td>
+      <td style="padding: 7px 4px; text-align: center; font-size: 11.5px; font-weight: 600; color: #374151;">${item.chicken_quantity}</td>
+      <td style="padding: 7px 4px; text-align: right; font-size: 11.5px; font-weight: 600; color: #374151;">${Number(item.total_kg).toFixed(2)} KG</td>
+      <td style="padding: 7px 4px; text-align: right; font-size: 11.5px; font-weight: 600; color: #374151;">₹ ${Number(item.price_per_kg).toFixed(2)}</td>
+      <td style="padding: 7px 6px; text-align: right; font-size: 11.5px; font-weight: 700; color: #111827;">${formatCurrency(item.amount)}</td>
     </tr>
   `
     )
@@ -51,7 +51,7 @@ export function renderBillHtml(bill: BillData, downloadUrl: string): string {
       overflow-x: hidden;
     }
     .bill-wrapper {
-      max-width: 600px;
+      max-width: 460px;
       margin: 0 auto;
       background: #FFFFFF;
       border-radius: 16px;
@@ -259,12 +259,12 @@ export function renderBillHtml(bill: BillData, downloadUrl: string): string {
       <table>
         <thead>
           <tr>
-            <th style="width: 28px; text-align: center;">SR<span class="sub-head">ક્રમ</span></th>
-            <th style="text-align: center;">BOX NO<span class="sub-head">બોક્સ નં</span></th>
-            <th style="text-align: center;">QTY<span class="sub-head">નંગ</span></th>
-            <th style="text-align: right;">WEIGHT<span class="sub-head">વજન (KG)</span></th>
-            <th style="text-align: right;">RATE<span class="sub-head">ભાવ (₹)</span></th>
-            <th style="text-align: right;">AMOUNT<span class="sub-head">રકમ (₹)</span></th>
+            <th style="width: 8%; text-align: center; padding: 7px 3px;">SR<span class="sub-head">ક્રમ</span></th>
+            <th style="width: 18%; text-align: center; padding: 7px 4px;">BOX NO<span class="sub-head">બોક્સ નં</span></th>
+            <th style="width: 14%; text-align: center; padding: 7px 4px;">QTY<span class="sub-head">નંગ</span></th>
+            <th style="width: 18%; text-align: right; padding: 7px 4px;">WEIGHT<span class="sub-head">વજન (KG)</span></th>
+            <th style="width: 18%; text-align: right; padding: 7px 4px;">RATE<span class="sub-head">ભાવ (₹)</span></th>
+            <th style="width: 24%; text-align: right; padding: 7px 6px;">AMOUNT<span class="sub-head">રકમ (₹)</span></th>
           </tr>
         </thead>
         <tbody>
