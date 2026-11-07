@@ -10,7 +10,8 @@
     "prestart": "npm run build",
     "start": "node dist/server.js",
     "start:tsx": "tsx src/server.ts",
-    "test:webhook": "tsx test_webhook_delivery_tracking.ts"
+    "test:webhook": "tsx test_webhook_delivery_tracking.ts",
+    "test:scenarios": "tsx test_whatsapp_invoice_scenarios.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.750.0",

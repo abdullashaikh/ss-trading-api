@@ -514,11 +514,15 @@ export async function sendBillImageWhatsApp(req: AuthenticatedRequest, res: Resp
   } catch (error: any) {
     console.error(`[WhatsApp] Failed to send bill #${billId} via WhatsApp:`, error.message);
 
-    const isConfigError = error.message?.includes('not configured');
+    const isConfigError = error.message?.includes('not configured') || error.message?.includes('configuration error');
     const isPhoneError = error.message?.includes('Invalid') || error.message?.includes('phone number');
     const isServiceWindow = error.code === 131047 || error.message?.includes('24-hour service window');
+    const isParamMismatch = error.code === 132000 || error.message?.includes('parameter mismatch');
+    const isTemplateNotFound = error.code === 132001 || error.message?.includes('template not found');
+    const isUndeliverable = error.code === 131026 || error.message?.includes('undeliverable');
+    const isAuthError = error.code === 190 || error.message?.includes('access token');
 
-    let statusCode = 500;
+    let statusCode = error.httpStatus || 500;
     let errorCode = 'SEND_FAILED';
 
     if (isConfigError) {
@@ -530,12 +534,25 @@ export async function sendBillImageWhatsApp(req: AuthenticatedRequest, res: Resp
     } else if (isServiceWindow) {
       statusCode = 400;
       errorCode = 'SERVICE_WINDOW_EXPIRED';
+    } else if (isParamMismatch) {
+      statusCode = 400;
+      errorCode = 'TEMPLATE_PARAM_MISMATCH';
+    } else if (isTemplateNotFound) {
+      statusCode = 400;
+      errorCode = 'TEMPLATE_NOT_FOUND';
+    } else if (isUndeliverable) {
+      statusCode = 400;
+      errorCode = 'MESSAGE_UNDELIVERABLE';
+    } else if (isAuthError) {
+      statusCode = 401;
+      errorCode = 'WHATSAPP_AUTH_FAILED';
     }
 
     return res.status(statusCode).json({
       success: false,
       message: error.message || 'Failed to send bill via WhatsApp',
-      error_code: errorCode
+      error_code: errorCode,
+      meta_error_code: error.code || null
     });
   } finally {
     activeSendingBills.delete(billId);

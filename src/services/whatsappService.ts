@@ -99,6 +99,96 @@ export interface BillWhatsAppDeliveryStatus {
   }>;
 }
 
+export interface WhatsAppSendLogEntry {
+  recipient: string;
+  mode: 'session' | 'template';
+  templateName?: string | null;
+  mediaId?: string | null;
+  messageId?: string | null;
+  errorCode?: number | null;
+  errorMessage?: string | null;
+  httpStatus?: number | null;
+}
+
+export class WhatsAppApiError extends Error {
+  code: number;
+  subcode?: number;
+  httpStatus: number;
+  metaErrorType?: string;
+  fbtraceId?: string;
+
+  constructor(
+    message: string,
+    code: number,
+    httpStatus: number,
+    extra?: { subcode?: number; metaErrorType?: string; fbtraceId?: string }
+  ) {
+    super(message);
+    this.name = 'WhatsAppApiError';
+    this.code = code;
+    this.httpStatus = httpStatus;
+    this.subcode = extra?.subcode;
+    this.metaErrorType = extra?.metaErrorType;
+    this.fbtraceId = extra?.fbtraceId;
+  }
+}
+
+/**
+ * Masks a phone number for secure logging (e.g., '919876543210' -> '9198****3210').
+ */
+export function maskPhoneNumber(phone: string): string {
+  if (!phone || typeof phone !== 'string') return '****';
+  const clean = phone.replace(/\D/g, '');
+  if (clean.length <= 4) return '****';
+  const start = clean.slice(0, 4);
+  const end = clean.slice(-4);
+  const stars = '*'.repeat(Math.max(2, clean.length - 8));
+  return `${start}${stars}${end}`;
+}
+
+/**
+ * Logs WhatsApp API operations safely without exposing access tokens or customer secrets.
+ */
+export function logWhatsAppAttempt(entry: WhatsAppSendLogEntry): void {
+  const statusStr = entry.httpStatus ? `HTTP ${entry.httpStatus}` : 'OK';
+  const errStr = entry.errorCode ? ` | Error: [${entry.errorCode}] ${entry.errorMessage}` : '';
+  console.log(
+    `[WhatsApp Attempt] To: ${maskPhoneNumber(entry.recipient)} | Mode: ${entry.mode} | ` +
+    `Template: ${entry.templateName || 'none'} | Media: ${entry.mediaId || 'none'} | ` +
+    `MsgId: ${entry.messageId || 'none'} | Status: ${statusStr}${errStr}`
+  );
+}
+
+/**
+ * Extracts and maps Meta Graph API error objects to user-friendly structured errors.
+ */
+export function parseMetaApiError(responseJson: any, httpStatus: number): WhatsAppApiError {
+  const err = responseJson?.error || {};
+  const code = Number(err.code) || httpStatus;
+  const subcode = err.error_subcode ? Number(err.error_subcode) : undefined;
+  const rawMsg = err.message || `Meta API request failed with HTTP ${httpStatus}`;
+  const metaErrorType = err.type;
+  const fbtraceId = err.fbtrace_id;
+
+  let friendlyMessage = rawMsg;
+  if (code === 131047) {
+    friendlyMessage =
+      'WhatsApp 24-hour customer service window is closed. A pre-approved message template must be used.';
+  } else if (code === 132000) {
+    friendlyMessage = `Meta template parameter mismatch: Named parameters do not match the approved template definition. (${rawMsg})`;
+  } else if (code === 132001) {
+    friendlyMessage = `Meta template not found or unavailable in requested language. (${rawMsg})`;
+  } else if (code === 131026) {
+    friendlyMessage = `Message undeliverable: The recipient number cannot receive WhatsApp messages or account is restricted. (${rawMsg})`;
+  } else if (code === 100) {
+    friendlyMessage = `Invalid parameter or request configuration sent to Meta Cloud API: ${rawMsg}`;
+  } else if (code === 190) {
+    friendlyMessage = `Invalid or expired WhatsApp access token. Please refresh WHATSAPP_ACCESS_TOKEN.`;
+  }
+
+  return new WhatsAppApiError(friendlyMessage, code, httpStatus, { subcode, metaErrorType, fbtraceId });
+}
+
 /**
  * Returns the configured WhatsApp Cloud API & Webhook settings from environment variables.
  * Never logs or prints sensitive secrets.
@@ -112,10 +202,32 @@ export function getWhatsAppCloudConfig(): WhatsAppCloudConfig {
     graphApiVersion: (process.env.META_GRAPH_API_VERSION || 'v21.0').trim(),
     businessAccountId: (process.env.WHATSAPP_BUSINESS_ACCOUNT_ID || '').trim(),
     webhookVerifyToken: (process.env.WHATSAPP_WEBHOOK_VERIFY_TOKEN || '').trim(),
-    templateName: (process.env.WHATSAPP_TEMPLATE_NAME || '').trim(),
-    templateLang: (process.env.WHATSAPP_TEMPLATE_LANG || 'en_US').trim(),
+    templateName: (process.env.WHATSAPP_TEMPLATE_NAME || 'ss_trading_invoice').trim(),
+    templateLang: (process.env.WHATSAPP_TEMPLATE_LANG || 'en').trim(),
     isDryRun: process.env.WHATSAPP_DRY_RUN === 'true'
   };
+}
+
+/**
+ * Validates WhatsApp Cloud API configuration at runtime.
+ */
+export function validateWhatsAppConfig(forTemplate: boolean = false): void {
+  const config = getWhatsAppCloudConfig();
+  if (config.isDryRun) return;
+
+  const missing: string[] = [];
+  if (!config.phoneNumberId) missing.push('WHATSAPP_PHONE_NUMBER_ID');
+  if (!config.accessToken) missing.push('WHATSAPP_ACCESS_TOKEN');
+  if (forTemplate) {
+    if (!config.templateName) missing.push('WHATSAPP_TEMPLATE_NAME');
+    if (!config.templateLang) missing.push('WHATSAPP_TEMPLATE_LANG');
+  }
+
+  if (missing.length > 0) {
+    throw new Error(
+      `WhatsApp Cloud API configuration error: Missing required environment variable(s): ${missing.join(', ')}`
+    );
+  }
 }
 
 /**
@@ -124,6 +236,38 @@ export function getWhatsAppCloudConfig(): WhatsAppCloudConfig {
 export function isWhatsAppCloudConfigured(): boolean {
   const config = getWhatsAppCloudConfig();
   return Boolean(config.phoneNumberId && config.accessToken);
+}
+
+/**
+ * Checks whether the recipient has an active 24-hour customer service window.
+ * The window opens ONLY when the customer has sent an inbound message to the business
+ * within the last 24 hours.
+ */
+export async function isCustomerServiceWindowOpen(recipientPhone: string): Promise<boolean> {
+  const digits = recipientPhone.replace(/\D/g, '');
+  const with91 = digits.length === 10 ? `91${digits}` : digits;
+  const without91 = digits.length === 12 && digits.startsWith('91') ? digits.slice(2) : digits;
+
+  try {
+    const [rows]: any = await pool.query(
+      `SELECT id, event_timestamp, received_at
+       FROM t_whatsapp_webhook_event
+       WHERE event_type = 'inbound_message'
+         AND (recipient_phone = ? OR recipient_phone = ? OR recipient_phone = ?)
+         AND (
+           event_timestamp >= DATE_SUB(NOW(), INTERVAL 24 HOUR)
+           OR received_at >= DATE_SUB(NOW(), INTERVAL 24 HOUR)
+         )
+       ORDER BY COALESCE(event_timestamp, received_at) DESC
+       LIMIT 1`,
+      [recipientPhone, with91, without91]
+    );
+
+    return Array.isArray(rows) && rows.length > 0;
+  } catch (err: any) {
+    console.warn(`[WhatsApp] Failed to query customer service window for ${maskPhoneNumber(recipientPhone)}:`, err.message);
+    return false;
+  }
 }
 
 /**
@@ -317,17 +461,25 @@ export async function uploadMediaToWhatsApp(
 
 /**
  * Sends an image message to a recipient phone number using a Meta media ID.
+ * Applicable ONLY inside the 24-hour customer service window.
  */
 export async function sendWhatsAppImageMessage(
   recipientPhone: string,
   mediaId: string,
   caption?: string
 ): Promise<{ messageId: string; response: any }> {
+  validateWhatsAppConfig(false);
   const config = getWhatsAppCloudConfig();
 
   if (config.isDryRun || config.accessToken === 'mock') {
     const mockMsgId = `wamid.mock_${Date.now()}_${Math.floor(Math.random() * 10000)}`;
-    console.log(`[WhatsApp Dry-Run] Sent image message to ${recipientPhone} -> msg_id: ${mockMsgId}`);
+    logWhatsAppAttempt({
+      recipient: recipientPhone,
+      mode: 'session',
+      mediaId,
+      messageId: mockMsgId,
+      httpStatus: 200
+    });
     return { messageId: mockMsgId, response: { messages: [{ id: mockMsgId }] } };
   }
 
@@ -359,30 +511,51 @@ export async function sendWhatsAppImageMessage(
   const responseJson: any = await res.json().catch(() => ({}));
 
   if (!res.ok) {
-    const errorObj = responseJson?.error || {};
-    const errorCode = errorObj.code;
-    const errorMsg = errorObj.message || `Failed to send image with HTTP ${res.status}`;
-
-    if (errorCode === 131047) {
-      const err: any = new Error(
-        'WhatsApp 24-hour service window closed. The customer must first initiate a message or a pre-approved message template must be used.'
-      );
-      err.code = 131047;
-      err.metaError = errorObj;
-      throw err;
-    }
-
-    console.error('[WhatsApp Cloud API] Send image failed:', responseJson);
-    throw new Error(`WhatsApp Send Error (${errorCode || res.status}): ${errorMsg}`);
+    const apiError = parseMetaApiError(responseJson, res.status);
+    logWhatsAppAttempt({
+      recipient: recipientPhone,
+      mode: 'session',
+      mediaId,
+      errorCode: apiError.code,
+      errorMessage: apiError.message,
+      httpStatus: res.status
+    });
+    throw apiError;
   }
 
   const messageId = responseJson.messages?.[0]?.id || '';
+  if (!messageId) {
+    const missingIdErr = new WhatsAppApiError(
+      'Meta API returned HTTP 200 but missing messages[0].id in response',
+      100,
+      res.status
+    );
+    logWhatsAppAttempt({
+      recipient: recipientPhone,
+      mode: 'session',
+      mediaId,
+      errorCode: 100,
+      errorMessage: missingIdErr.message,
+      httpStatus: res.status
+    });
+    throw missingIdErr;
+  }
+
+  logWhatsAppAttempt({
+    recipient: recipientPhone,
+    mode: 'session',
+    mediaId,
+    messageId,
+    httpStatus: res.status
+  });
+
   return { messageId, response: responseJson };
 }
 
 /**
  * Sends a WhatsApp Template message containing an image in the header.
- * Used for initiating messages outside the 24-hour customer service window.
+ * Used for initiating messages outside the 24-hour customer service window
+ * or contacting new customers.
  */
 export async function sendWhatsAppTemplateWithImage(
   recipientPhone: string,
@@ -390,44 +563,31 @@ export async function sendWhatsAppTemplateWithImage(
   details: WhatsAppBillDetails,
   templateNameOverride?: string
 ): Promise<{ messageId: string; response: any }> {
+  validateWhatsAppConfig(true);
   const config = getWhatsAppCloudConfig();
-  const templateName = templateNameOverride || config.templateName;
-
-  if (!templateName) {
-    throw new Error(
-      'WhatsApp 24-hour window requires an approved message template, but WHATSAPP_TEMPLATE_NAME is not configured.'
-    );
-  }
+  const templateName = templateNameOverride || config.templateName || 'ss_trading_invoice';
+  const langCode = config.templateLang || 'en';
 
   if (config.isDryRun || config.accessToken === 'mock') {
     const mockMsgId = `wamid.mock_tpl_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
-    console.log(`[WhatsApp Dry-Run] Sent template message to ${recipientPhone} -> msg_id: ${mockMsgId}`);
+    logWhatsAppAttempt({
+      recipient: recipientPhone,
+      mode: 'template',
+      templateName,
+      mediaId,
+      messageId: mockMsgId,
+      httpStatus: 200
+    });
     return { messageId: mockMsgId, response: { messages: [{ id: mockMsgId }] } };
   }
 
   const url = `https://graph.facebook.com/${config.graphApiVersion}/${config.phoneNumberId}/messages`;
 
-  // Format currency amounts without duplicating the rupee symbol (since template includes ₹)
-  const formattedTotal = Number(details.totalAmount).toLocaleString('en-IN');
-  const formattedPending = Number(details.finalPending).toLocaleString('en-IN');
+  // Format currency amounts without duplicating ₹ (since the template body text already contains ₹)
+  const formattedTotal = Number(details.totalAmount || 0).toLocaleString('en-IN');
+  const formattedPending = Number(details.finalPending || 0).toLocaleString('en-IN');
 
-  // Named parameters matching the submitted template (customer_name, invoice_number, total_amount, outstanding_balance)
-  const namedParameters = [
-    { type: 'text', parameter_name: 'customer_name', text: details.customerName || 'Customer' },
-    { type: 'text', parameter_name: 'invoice_number', text: details.billNumber },
-    { type: 'text', parameter_name: 'total_amount', text: formattedTotal },
-    { type: 'text', parameter_name: 'outstanding_balance', text: formattedPending }
-  ];
-
-  // Positional parameters fallback (for {{1}}, {{2}}, {{3}}, {{4}} template definitions)
-  const positionalParameters = [
-    { type: 'text', text: details.customerName || 'Customer' },
-    { type: 'text', text: details.billNumber },
-    { type: 'text', text: formattedTotal },
-    { type: 'text', text: formattedPending }
-  ];
-
-  const buildPayload = (params: any[]) => ({
+  const payload = {
     messaging_product: 'whatsapp',
     recipient_type: 'individual',
     to: recipientPhone,
@@ -435,7 +595,7 @@ export async function sendWhatsAppTemplateWithImage(
     template: {
       name: templateName,
       language: {
-        code: config.templateLang || 'en_US'
+        code: langCode
       },
       components: [
         {
@@ -451,49 +611,86 @@ export async function sendWhatsAppTemplateWithImage(
         },
         {
           type: 'body',
-          parameters: params
+          parameters: [
+            {
+              type: 'text',
+              parameter_name: 'customer_name',
+              text: String(details.customerName || 'Customer').trim()
+            },
+            {
+              type: 'text',
+              parameter_name: 'invoice_number',
+              text: String(details.billNumber || '').trim()
+            },
+            {
+              type: 'text',
+              parameter_name: 'total_amount',
+              text: formattedTotal
+            },
+            {
+              type: 'text',
+              parameter_name: 'outstanding_balance',
+              text: formattedPending
+            }
+          ]
         }
       ]
     }
-  });
+  };
 
-  // Attempt with named parameters first (standard for modern Meta templates with variable names)
-  let res = await fetch(url, {
+  const res = await fetch(url, {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${config.accessToken}`,
       'Content-Type': 'application/json'
     },
-    body: JSON.stringify(buildPayload(namedParameters))
+    body: JSON.stringify(payload)
   });
 
-  let responseJson: any = await res.json().catch(() => ({}));
-
-  // If rejected because Meta expected positional parameters (or vice versa), auto-retry with positional
-  if (!res.ok && (responseJson?.error?.code === 100 || responseJson?.error?.code === 132000)) {
-    console.warn('[WhatsApp Cloud API] Retrying template with positional parameters fallback...');
-    const retryRes = await fetch(url, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${config.accessToken}`,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify(buildPayload(positionalParameters))
-    });
-    const retryJson = await retryRes.json().catch(() => ({}));
-    if (retryRes.ok) {
-      res = retryRes;
-      responseJson = retryJson;
-    }
-  }
+  const responseJson: any = await res.json().catch(() => ({}));
 
   if (!res.ok) {
-    const errorObj = responseJson?.error || {};
-    console.error('[WhatsApp Cloud API] Send template failed:', responseJson);
-    throw new Error(`WhatsApp Template Error (${errorObj.code || res.status}): ${errorObj.message}`);
+    const apiError = parseMetaApiError(responseJson, res.status);
+    logWhatsAppAttempt({
+      recipient: recipientPhone,
+      mode: 'template',
+      templateName,
+      mediaId,
+      errorCode: apiError.code,
+      errorMessage: apiError.message,
+      httpStatus: res.status
+    });
+    throw apiError;
   }
 
   const messageId = responseJson.messages?.[0]?.id || '';
+  if (!messageId) {
+    const missingIdErr = new WhatsAppApiError(
+      'Meta API returned HTTP 200 but missing messages[0].id in response',
+      100,
+      res.status
+    );
+    logWhatsAppAttempt({
+      recipient: recipientPhone,
+      mode: 'template',
+      templateName,
+      mediaId,
+      errorCode: 100,
+      errorMessage: missingIdErr.message,
+      httpStatus: res.status
+    });
+    throw missingIdErr;
+  }
+
+  logWhatsAppAttempt({
+    recipient: recipientPhone,
+    mode: 'template',
+    templateName,
+    mediaId,
+    messageId,
+    httpStatus: res.status
+  });
+
   return { messageId, response: responseJson };
 }
 
@@ -543,6 +740,58 @@ export async function recordOutgoingWhatsAppMessage(data: {
 }
 
 /**
+ * Persists a failed outgoing WhatsApp attempt in t_whatsapp_message for audit and error tracking.
+ */
+export async function recordFailedWhatsAppMessage(data: {
+  billId: number;
+  billNumber: string;
+  recipientPhone: string;
+  phoneNumberId: string;
+  businessAccountId?: string | null;
+  mediaId?: string | null;
+  pageNumber: number;
+  totalPages: number;
+  messageType?: string;
+  sendingMode?: string;
+  errorCode?: number | null;
+  errorTitle?: string | null;
+  errorMessage?: string | null;
+}): Promise<void> {
+  const trackingMsgId = `failed_${Date.now()}_p${data.pageNumber}_${Math.floor(Math.random() * 1000)}`;
+
+  const sql = `
+    INSERT INTO t_whatsapp_message (
+      bill_id, bill_number, recipient_phone, phone_number_id, business_account_id,
+      media_id, whatsapp_message_id, page_number, total_pages, message_type,
+      sending_mode, status, failed_at, error_code, error_title, error_message
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'failed', NOW(), ?, ?, ?)
+  `;
+
+  try {
+    await pool.query(sql, [
+      data.billId,
+      data.billNumber,
+      data.recipientPhone,
+      data.phoneNumberId,
+      data.businessAccountId || null,
+      data.mediaId || null,
+      trackingMsgId,
+      data.pageNumber || 1,
+      data.totalPages || 1,
+      data.messageType || 'image',
+      data.sendingMode || 'template',
+      data.errorCode || null,
+      data.errorTitle || 'Meta Send Failed',
+      data.errorMessage || null
+    ]);
+  } catch (dbErr: any) {
+    console.error('[WhatsApp] Error recording failed message in DB:', dbErr.message);
+  }
+
+  await recalculateBillOverallWhatsAppStatus(data.billId);
+}
+
+/**
  * Computes and updates the overall WhatsApp delivery status of a bill in t_bill_master.
  */
 export async function recalculateBillOverallWhatsAppStatus(billId: number): Promise<string> {
@@ -557,6 +806,7 @@ export async function recalculateBillOverallWhatsAppStatus(billId: number): Prom
   }
 
   const hasFailed = messages.some((m) => m.status === 'failed');
+  const allFailed = messages.every((m) => m.status === 'failed');
   const allRead = messages.every((m) => m.status === 'read');
   const allDeliveredOrRead = messages.every((m) => m.status === 'delivered' || m.status === 'read');
   const anyDeliveredOrRead = messages.some((m) => m.status === 'delivered' || m.status === 'read');
@@ -564,9 +814,11 @@ export async function recalculateBillOverallWhatsAppStatus(billId: number): Prom
 
   let overall: string;
 
-  if (hasFailed) {
-    // If some pages succeeded but at least one failed, it is partially_delivered / failed
-    overall = anyDeliveredOrRead ? 'partially_delivered' : 'failed';
+  if (allFailed) {
+    overall = 'failed';
+  } else if (hasFailed) {
+    // If some pages succeeded or are accepted/sent/delivered, but at least one failed, it's partially_delivered
+    overall = 'partially_delivered';
   } else if (allRead) {
     overall = 'read';
   } else if (allDeliveredOrRead) {
@@ -589,6 +841,10 @@ export async function recalculateBillOverallWhatsAppStatus(billId: number): Prom
 
   return overall;
 }
+
+
+
+
 
 /**
  * Status hierarchy ranks to prevent out-of-order webhook events from downgrading terminal or advanced states.
@@ -901,46 +1157,185 @@ export async function sendBillAsWhatsAppImages(
 
   const primaryCaption = options.customCaption || defaultCaption;
 
+  // Sending-mode decision:
+  // Case A: New customer / outside 24h window -> Directly use approved template. Do NOT try normal image first!
+  // Case B: Existing customer / inside 24h window -> Can use normal image (session).
+  // If we cannot confidently determine that session is open, use the approved template.
+  let sendMode: 'session' | 'template';
+  if (options.useTemplate) {
+    sendMode = 'template';
+  } else {
+    const isSessionOpen = await isCustomerServiceWindowOpen(recipient);
+    sendMode = isSessionOpen ? 'session' : 'template';
+  }
+
   const messagesSent: SentMessageSummary[] = [];
-  let sendMode: 'session' | 'template' = options.useTemplate ? 'template' : 'session';
 
   for (let i = 0; i < imageBuffers.length; i++) {
     const pageNum = i + 1;
     const pageImage = imageBuffers[i];
     const fileName = `${details.billNumber}_page_${pageNum}.png`;
 
-    const mediaId = await uploadMediaToWhatsApp(pageImage, fileName, 'image/png');
+    let mediaId: string;
+    try {
+      mediaId = await uploadMediaToWhatsApp(pageImage, fileName, 'image/png');
+    } catch (uploadErr: any) {
+      if (options.billId && i === 0) {
+        await recordFailedWhatsAppMessage({
+          billId: options.billId,
+          billNumber: details.billNumber,
+          recipientPhone: recipient,
+          phoneNumberId: config.phoneNumberId || 'unknown',
+          businessAccountId: config.businessAccountId || null,
+          pageNumber: pageNum,
+          totalPages,
+          sendingMode: sendMode,
+          errorCode: 100,
+          errorTitle: 'Media Upload Failed',
+          errorMessage: uploadErr.message
+        });
+      }
+      throw uploadErr;
+    }
 
     let messageId = '';
+    let currentPageMode: 'session' | 'template' = sendMode;
 
     if (i === 0) {
       if (sendMode === 'template') {
-        const tplResult = await sendWhatsAppTemplateWithImage(recipient, mediaId, details);
-        messageId = tplResult.messageId;
+        try {
+          const tplResult = await sendWhatsAppTemplateWithImage(recipient, mediaId, details);
+          messageId = tplResult.messageId;
+        } catch (tplErr: any) {
+          // If the template fails, do not continue sending subsequent images
+          if (options.billId) {
+            await recordFailedWhatsAppMessage({
+              billId: options.billId,
+              billNumber: details.billNumber,
+              recipientPhone: recipient,
+              phoneNumberId: config.phoneNumberId || 'unknown',
+              businessAccountId: config.businessAccountId || null,
+              mediaId,
+              pageNumber: pageNum,
+              totalPages,
+              sendingMode: 'template',
+              errorCode: tplErr.code || 500,
+              errorTitle: 'Template Send Failed',
+              errorMessage: tplErr.message
+            });
+          }
+          throw tplErr;
+        }
       } else {
+        // Customer service window is open -> session mode
         try {
           const sendResult = await sendWhatsAppImageMessage(recipient, mediaId, primaryCaption);
           messageId = sendResult.messageId;
         } catch (sendErr: any) {
           if (sendErr?.code === 131047 && config.templateName) {
-            console.warn('[WhatsApp] 24-hr window closed. Attempting fallback to template:', config.templateName);
-            const fallbackResult = await sendWhatsAppTemplateWithImage(recipient, mediaId, details);
-            messageId = fallbackResult.messageId;
-            sendMode = 'template';
+            console.warn('[WhatsApp] 24-hr window unexpectedly closed. Switching to template fallback:', config.templateName);
+            try {
+              const fallbackResult = await sendWhatsAppTemplateWithImage(recipient, mediaId, details);
+              messageId = fallbackResult.messageId;
+              currentPageMode = 'template';
+              sendMode = 'template';
+            } catch (fallbackErr: any) {
+              if (options.billId) {
+                await recordFailedWhatsAppMessage({
+                  billId: options.billId,
+                  billNumber: details.billNumber,
+                  recipientPhone: recipient,
+                  phoneNumberId: config.phoneNumberId || 'unknown',
+                  businessAccountId: config.businessAccountId || null,
+                  mediaId,
+                  pageNumber: pageNum,
+                  totalPages,
+                  sendingMode: 'template',
+                  errorCode: fallbackErr.code || 500,
+                  errorTitle: 'Template Fallback Failed',
+                  errorMessage: fallbackErr.message
+                });
+              }
+              throw fallbackErr;
+            }
           } else {
+            if (options.billId) {
+              await recordFailedWhatsAppMessage({
+                billId: options.billId,
+                billNumber: details.billNumber,
+                recipientPhone: recipient,
+                phoneNumberId: config.phoneNumberId || 'unknown',
+                businessAccountId: config.businessAccountId || null,
+                mediaId,
+                pageNumber: pageNum,
+                totalPages,
+                sendingMode: 'session',
+                errorCode: sendErr.code || 500,
+                errorTitle: 'Session Send Failed',
+                errorMessage: sendErr.message
+              });
+            }
             throw sendErr;
           }
         }
       }
     } else {
-      if (sendMode === 'template') {
-        // Outside 24h window, every subsequent page must also be sent via approved template
-        const subResult = await sendWhatsAppTemplateWithImage(recipient, mediaId, details);
-        messageId = subResult.messageId;
-      } else {
+      // Multiple-page invoice: subsequent pages (pageNum > 1)
+      // Send subsequent pages as normal image messages ONLY IF the customer service window is open
+      const isWindowOpen = await isCustomerServiceWindowOpen(recipient);
+
+      if (isWindowOpen) {
+        currentPageMode = 'session';
         const subCaption = `🧾 *SS TRADING INVOICE* — #${details.billNumber}\n*(Page ${pageNum} of ${totalPages})*`;
-        const subResult = await sendWhatsAppImageMessage(recipient, mediaId, subCaption);
-        messageId = subResult.messageId;
+        try {
+          const subResult = await sendWhatsAppImageMessage(recipient, mediaId, subCaption);
+          messageId = subResult.messageId;
+        } catch (subErr: any) {
+          console.warn(`[WhatsApp] Page ${pageNum} image send failed:`, subErr.message);
+          if (options.billId) {
+            await recordFailedWhatsAppMessage({
+              billId: options.billId,
+              billNumber: details.billNumber,
+              recipientPhone: recipient,
+              phoneNumberId: config.phoneNumberId || 'unknown',
+              businessAccountId: config.businessAccountId || null,
+              mediaId,
+              pageNumber: pageNum,
+              totalPages,
+              sendingMode: 'session',
+              errorCode: subErr.code || 500,
+              errorTitle: `Page ${pageNum} Send Failed`,
+              errorMessage: subErr.message
+            });
+          }
+          break; // Partial failure handled: preserve previous successful pages
+        }
+      } else {
+        // Customer service window is NOT open: send via approved template
+        currentPageMode = 'template';
+        try {
+          const subResult = await sendWhatsAppTemplateWithImage(recipient, mediaId, details);
+          messageId = subResult.messageId;
+        } catch (subErr: any) {
+          console.warn(`[WhatsApp] Page ${pageNum} template send failed:`, subErr.message);
+          if (options.billId) {
+            await recordFailedWhatsAppMessage({
+              billId: options.billId,
+              billNumber: details.billNumber,
+              recipientPhone: recipient,
+              phoneNumberId: config.phoneNumberId || 'unknown',
+              businessAccountId: config.businessAccountId || null,
+              mediaId,
+              pageNumber: pageNum,
+              totalPages,
+              sendingMode: 'template',
+              errorCode: subErr.code || 500,
+              errorTitle: `Page ${pageNum} Template Failed`,
+              errorMessage: subErr.message
+            });
+          }
+          break; // Partial failure handled
+        }
       }
     }
 
@@ -957,7 +1352,7 @@ export async function sendBillAsWhatsAppImages(
         pageNumber: pageNum,
         totalPages,
         messageType: 'image',
-        sendingMode: sendMode,
+        sendingMode: currentPageMode,
         status: 'accepted'
       });
     }
@@ -970,10 +1365,12 @@ export async function sendBillAsWhatsAppImages(
     });
   }
 
-  // Update bill status to ACCEPTED in t_bill_master
+  // Update bill status in t_bill_master
   if (options.billId) {
     await recalculateBillOverallWhatsAppStatus(options.billId);
   }
+
+  const allPagesSent = messagesSent.length === totalPages;
 
   return {
     success: true,
@@ -983,7 +1380,9 @@ export async function sendBillAsWhatsAppImages(
     totalPages,
     messagesSent,
     mode: sendMode,
-    message: 'WhatsApp accepted the bill image. Awaiting delivery confirmation.'
+    message: allPagesSent
+      ? 'WhatsApp accepted the bill image. Awaiting delivery confirmation.'
+      : `WhatsApp accepted ${messagesSent.length} of ${totalPages} bill pages. Awaiting delivery confirmation.`
   };
 }
 
