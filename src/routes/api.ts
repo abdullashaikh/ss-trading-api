@@ -35,6 +35,13 @@ import {
 import {
   getPurchaseReport, getSalesReport, getWorkerReport, getOverallBusinessReport
 } from '../controllers/reportController.js';
+import {
+  getOtherExpenses,
+  getOtherExpensesUsage,
+  createOtherExpense,
+  updateOtherExpense,
+  deleteOtherExpense
+} from '../controllers/otherExpenseController.js';
 import { getDashboard } from '../controllers/dashboardController.js';
 import { authenticate } from '../middlewares/auth.js';
 
@@ -128,4 +135,12 @@ router.get('/reports/sales', authenticate as any, getSalesReport as any);
 router.get('/reports/workers', authenticate as any, getWorkerReport as any);
 router.get('/reports/vehicles', authenticate as any, getVehicleReport as any);
 router.get('/reports/overall', authenticate as any, getOverallBusinessReport as any);
+
+// 10. Other Expenses routes (Max 20 entries / month)
+router.get('/other-expenses', authenticate as any, getOtherExpenses as any);
+router.get('/other-expenses/usage', authenticate as any, getOtherExpensesUsage as any);
+router.post('/other-expenses', authenticate as any, createOtherExpense as any);
+router.put('/other-expenses/:id', authenticate as any, updateOtherExpense as any);
+router.delete('/other-expenses/:id', authenticate as any, deleteOtherExpense as any);
+
 
